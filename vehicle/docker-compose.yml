@@ -1,0 +1,93 @@
+x-autoware-base: &autoware-base
+  image: "aichallenge-2025-dev-${USER}"
+  privileged: true
+  pull_policy: never
+  network_mode: host
+  environment:
+    - DISPLAY=${DISPLAY}
+    - USER=${USER}
+    - ROS_DISTRO=humble
+    - XAUTHORITY=${XAUTHORITY}
+    - QT_X11_NO_MITSHM=1
+    - TZ=Asia/Tokyo
+  volumes:
+    - ../output:/output
+    - ../aichallenge:/aichallenge
+    - ../remote:/remote
+    - ./:/vehicle
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - /dev/dri:/dev/dri
+    - ${XAUTHORITY}:${XAUTHORITY}:rw
+  devices:
+    - /dev/dri
+    - /dev/video0
+  working_dir: /aichallenge
+
+x-racing_kart_interface-base: &racing_kart_interface-base
+  image: "ghcr.io/tier4/racing_kart_interface:latest-experiment"
+  privileged: true
+  pull_policy: never
+  network_mode: host
+  environment:
+    - DISPLAY=${DISPLAY}
+    - USER=${USER}
+    - TZ=Asia/Tokyo
+    - ROS_DISTRO=humble
+    - NTRIP_USERNAME=${NTRIP_USERNAME}
+    - NTRIP_PASSWORD=${NTRIP_PASSWORD}
+  volumes:
+    - /dev/vcu:/dev/vcu
+    - /dev/gnss:/dev/gnss
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - /dev/dri:/dev/dri
+  devices:
+    - /dev/dri
+  group_add:
+    - dialout
+  working_dir: /workspace
+
+services:
+  # Zenoh service
+  zenoh:
+    <<: *autoware-base
+    container_name: "zenoh"
+    stop_grace_period: 0.1s
+    working_dir: /vehicle
+    command: ["bash", "-c", "case ${VEHICLE_ID} in A2) PORT=7448;; A3) PORT=7449;; A6) PORT=7450;; A7) PORT=7451;; *) echo 'Invalid VEHICLE_ID'; exit 1;; esac && zenoh-bridge-ros2dds client -e tls/57.180.63.135:$$PORT -c /vehicle/zenoh.json5"]
+
+  # Driver service
+  # Driver build service
+  driver:
+    <<: *racing_kart_interface-base
+    container_name: "racing_kart_interface-run"
+    stop_grace_period: 0.1s
+    command: ['vehicle']
+
+  # Autoware service
+  autoware:
+    <<: *autoware-base 
+    container_name: "aic-2025-autoware"
+    stop_grace_period: 0.1s
+    command: ["bash", "-c", "source /opt/ros/humble/setup.bash && source /autoware/install/setup.bash && cd /aichallenge && exec bash run_autoware.bash vehicle"]
+
+  # rosbag record 
+  rosbag:
+    <<: *autoware-base 
+    init: true
+    container_name: "aic-2025-rosbag"
+    stop_grace_period: 5.0s
+    command: ["bash", "-c", "source /opt/ros/humble/setup.bash && source /autoware/install/setup.bash && cd /vehicle && exec bash record_rosbag.bash"]
+
+  # rosbag record 
+  rviz2:
+    <<: *autoware-base 
+    container_name: "aic-2025-rviz2"
+    stop_grace_period: 0.1s
+    command: ["bash", "-c", "source /opt/ros/humble/setup.bash && source /autoware/install/setup.bash && cd /aichallenge && exec bash run_rviz.bash remote"]
+
+  # Aic-build service
+  aic-build:
+    <<: *autoware-base
+    container_name: "aic-2025-build"
+    stop_grace_period: 0.1s
+    command: ['bash', '-c', 'source /opt/ros/humble/setup.bash && source /autoware/install/setup.bash && cd /aichallenge && timeout 1800 bash build_autoware.bash|| echo "Build failed or timed out"']
